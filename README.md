@@ -2,6 +2,7 @@
 Contains the python script &amp; necessary packages to upload
 
 Lambda Functin Description:
+
     This function detects when a file lands in an S3 bucket, thus triggering it.
     The file is then downloaded to a temporary file, where it is then transcribed using Azure openAI's Whisper API, which transcribes the file. As of 11/16/23, the open.audio.transcribe() function is deprecated, but we use version 0.28, which routes this file to Azure's Whisper, instead of OpenAI's whisper.
     The transcribed file is then cleaned/de-identified, and then analized by feeding chatGPT a series of prompts, as well as the transcript.
