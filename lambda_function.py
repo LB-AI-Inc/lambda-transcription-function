@@ -6,6 +6,7 @@ import boto3
 import os
 import re
 import time
+import subprocess
 
 def replace_ssns(string):
     ssn_pattern = r'\b(\d{3}-\d{2}-\d{4}|\d{9})\b'
@@ -111,7 +112,28 @@ def get_openai_credentials():
     except Exception as e:
         print(f"Error retrieving OpenAI and WhisperAI credentials from Secrets Manager: {e}")
         return None, None
+
     
+def get_audio_duration(file_path):
+    try:
+        # Command to get audio duration using FFMPEG
+        output_file = '/tmp/output.mp3'  # Output file path
+        p1 = subprocess.run(["/opt/ffmpeg", "-i", file_path, output_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        duration_pattern = re.compile(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)")
+        duration_match = duration_pattern.search(p1.stderr.decode("utf-8"))
+        
+        if duration_match:
+            hours, minutes, seconds = map(float, duration_match.groups())
+            total_seconds = (hours * 3600) + (minutes * 60) + seconds
+            os.remove(output_file)
+            return round(total_seconds)
+        else:
+            return None 
+
+    except subprocess.CalledProcessError as e:
+        # Handle FFMPEG command execution errors
+        print("FFMPEG error:", e)
+        return None
     
 def analyze(transcript, openai_credentials):
     # initialize the chat completion azure creds
@@ -309,6 +331,7 @@ def lambda_handler(event, context):
 
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
+    key_lower = key.lower()
     # destination server info
     prod_domain = 'app.lightbulb.ai'
     dev_domain = 'dev.lightbulb.ai'
@@ -320,20 +343,28 @@ def lambda_handler(event, context):
     transcript = ''
     masked_transcript = ''
     error = ''
+    audio_duration = 0
     url = "https://"+prod_domain+api_route
     # url = "https://"+dev_domain+api_route
-    # url = "https://8fd2-136-49-4-54.ngrok-free.app"+api_route
+    # url = "http://b0f6-2605-a601-a0c8-dc00-593e-40a5-9e0b-c7a3.ngrok.io"+api_route
 
     # Download file from S3
+    local_file_path = '/tmp/'+key
     s3client = boto3.client('s3')
-    s3client.download_file(bucket, key, '/tmp/'+key)
-    print("Downloading", key, "from", bucket, "to /tmp/"+key)
+    s3client.download_file(bucket, key, local_file_path)
+    print("Downloading", key, "from", bucket, local_file_path)
     openai_credentials, whisper_credentials = get_openai_credentials()
 
-    os.chdir('/tmp')
-    time.sleep(5)
-    for f in os.listdir():
-        with open(f, 'rb') as file:
+    try:
+
+        if not key_lower.endswith(('.wav', '.mp3')) or re.search(r'\.(wav|mp3)\s*\(\d+\)$', key_lower):
+            raise Exception("Bad file format")
+        print("Filepath: ", local_file_path)
+        audio_duration = 0
+        # audio_duration = get_audio_duration(local_file_path)
+        # print("Audio Duration: ", audio_duration)
+        
+        with open(local_file_path, 'rb') as file:
             ### initialize whisper azure creds
             api_key, api_base, api_version = whisper_credentials['api_key'], whisper_credentials['api_base'], whisper_credentials['api_version']
             openai.api_key = api_key
@@ -353,14 +384,21 @@ def lambda_handler(event, context):
                 # replaces SSNs with XXX-XX-XXXX
                 if len(json.dumps(transcript)) > 0:
                     haveTranscript = True
-                    break
             except Exception as e:
                 error = e
                 print("Exception in transcription:", e)
 
+            print("Closing file...")
+            file.close()
+
+
+    except Exception as e:
+        error = e
+        print("Could not open file:", e)
+
     try:
         # delete the file from the /tmp directory
-        os.remove('/tmp/'+key)
+        os.remove(local_file_path)
         print("Deleted file /tmp/"+key)
     except Exception as e:
         error = e
@@ -370,7 +408,8 @@ def lambda_handler(event, context):
 
     try:
         # analyze the transcript with the given prompts
-        result, haveResponse = analyze(transcript, openai_credentials)
+        if transcript:
+            result, haveResponse = analyze(transcript, openai_credentials)
     except Exception as e:
         error = e
         print("Exception in Q&A:", e)
