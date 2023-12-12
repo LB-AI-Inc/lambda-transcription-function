@@ -8,6 +8,7 @@ import re
 import time
 import subprocess
 
+
 def replace_ssns(string):
     ssn_pattern = r'\b(\d{3}-\d{2}-\d{4}|\d{9})\b'
     result_string = re.sub(ssn_pattern, 'XXX-XX-XXXX', string)
@@ -27,6 +28,31 @@ def replace_digits_with_x(string):
     result_string = ''.join(['X' if char.isdigit() else char for char in string])
     return result_string
 
+def move_file(source_bucket, source_key, destination_bucket, destination_key):
+    s3 = boto3.client('s3')
+    try:
+        # Copy the object
+        s3.copy_object(
+            Bucket=destination_bucket,
+            Key=destination_key,
+            CopySource={
+                'Bucket': source_bucket,
+                'Key': source_key
+            }
+        )
+        
+        # Delete the original object
+        s3.delete_object(
+            Bucket=source_bucket,
+            Key=source_key
+        )
+        
+        print(f"File moved from {source_bucket}/{source_key} to {destination_bucket}/{destination_key}")
+        return True
+    except Exception as e:
+        print(f"Error moving file: {e}")
+        return False
+    
 def with_function(question, system_prompt, transcript):
     functions = [{
             'name': 'answer_generator',
@@ -332,10 +358,23 @@ def lambda_handler(event, context):
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
     key_lower = key.lower()
-    # destination server info
+
+    # -----------------------------------------------------
+    # destination server info:
+    # change this if you're working in different environments
+    
     prod_domain = 'app.lightbulb.ai'
     dev_domain = 'dev.lightbulb.ai'
     api_route = '/api/call-data'
+
+    destination_bucket = 'lightbulb-prod-output'
+    # destination_bucket = 'lightbulb-dev-output'
+
+    url = "https://"+prod_domain+api_route
+    # url = "https://"+dev_domain+api_route
+    # url = "http://b581-2605-a601-a0c8-dc00-6be7-5945-4f80-f17a.ngrok.io"+api_route
+    # -----------------------------------------------------
+
     haveTranscript = False
     haveResponse = False
     openai.api_type = "azure"
@@ -344,9 +383,7 @@ def lambda_handler(event, context):
     masked_transcript = ''
     error = ''
     audio_duration = 0
-    url = "https://"+prod_domain+api_route
-    # url = "https://"+dev_domain+api_route
-    # url = "http://b0f6-2605-a601-a0c8-dc00-593e-40a5-9e0b-c7a3.ngrok.io"+api_route
+    
 
     # Download file from S3
     local_file_path = '/tmp/'+key
@@ -374,6 +411,7 @@ def lambda_handler(event, context):
                 notify_server(url, bucket, key)
             except Exception as e:
                 print("Exception while phoning home:", e)
+                
             try:
                 # attempts to transcribe audio file
                 transcript = openai.Audio.transcribe(
@@ -381,7 +419,6 @@ def lambda_handler(event, context):
                     model="whisper-1",
                     file=file
                     )['text']
-                # replaces SSNs with XXX-XX-XXXX
                 if len(json.dumps(transcript)) > 0:
                     haveTranscript = True
             except Exception as e:
@@ -415,11 +452,14 @@ def lambda_handler(event, context):
         print("Exception in Q&A:", e)
 
     try:
-        # indicates success or failure - can be redirected to a different server
+        # Indicates success or failure - can be redirected to a different server
         if haveTranscript & haveResponse:
+            # replaces SSNs with XXX-XX-XXXX
             masked_transcript = replace_digits_with_x(transcript)
             print("Masked transcript:",masked_transcript)
 
+            destination_key = key
+            move_file(bucket, key, destination_bucket, destination_key)
             data = json.dumps({
                 "bucket": bucket,
                 "key": key,
@@ -431,7 +471,7 @@ def lambda_handler(event, context):
             })
             request = requests.post(url, data=data)
             print("Success:", request)
-            # print(json.dumps(transcript))
+
         else:
             data = json.dumps({
                 "bucket": bucket,
