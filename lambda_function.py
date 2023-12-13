@@ -86,16 +86,16 @@ def without_function(question, system_prompt, transcript):
 def get_openai_credentials():
     secret_name = "openAI_credentials"
     region_name = "us-east-1"
-    
+
     # Create a Secrets Manager client
     session = boto3.session.Session()
     client = session.client(service_name='secretsmanager', region_name=region_name)
-    
+
     # Retrieve the secret
     try:
         response = client.get_secret_value(SecretId=secret_name)
         secret = json.loads(response['SecretString'])
-        
+
         # Extract OpenAI and WhisperAI credentials
         openai_credentials = {
             'api_key': secret.get('OpenAI', ''),
@@ -105,15 +105,15 @@ def get_openai_credentials():
         whisperai_credentials = {
             'api_key': secret.get('WhisperAI', ''),
             'api_base': "https://lightbulb-whisper.openai.azure.com/",
-            'api_version': "2023-09-01-preview" 
-        }    
+            'api_version': "2023-09-01-preview"
+        }
         return openai_credentials, whisperai_credentials
-    
+
     except Exception as e:
         print(f"Error retrieving OpenAI and WhisperAI credentials from Secrets Manager: {e}")
         return None, None
 
-    
+
 def get_audio_duration(file_path):
     try:
         # Command to get audio duration using FFMPEG
@@ -121,20 +121,20 @@ def get_audio_duration(file_path):
         p1 = subprocess.run(["/opt/ffmpeg", "-i", file_path, output_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         duration_pattern = re.compile(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)")
         duration_match = duration_pattern.search(p1.stderr.decode("utf-8"))
-        
+
         if duration_match:
             hours, minutes, seconds = map(float, duration_match.groups())
             total_seconds = (hours * 3600) + (minutes * 60) + seconds
             os.remove(output_file)
             return round(total_seconds)
         else:
-            return None 
+            return None
 
     except subprocess.CalledProcessError as e:
         # Handle FFMPEG command execution errors
         print("FFMPEG error:", e)
         return None
-    
+
 def analyze(transcript, openai_credentials):
     # initialize the chat completion azure creds
     api_key, api_base, api_version = openai_credentials['api_key'], openai_credentials['api_base'], openai_credentials['api_version']
@@ -307,10 +307,10 @@ def analyze(transcript, openai_credentials):
                     "raw": response['choices'][0]['message']['content']
                 }
         except Exception as e:
-            print("Exception in formatting response:", e)
+            print("Exception in formatting response:", json.dumps(e))
         if results[question]['type'] != "StrengthAssessment" and results[question]['type'] != "WeaknessAssessment" and results[question]['type'] != "Gist":
             results[question]['raw'] = replace_digits_with_x(results[question]['raw'])
-        print('\n'+json.dumps(results[question]))
+        # print('\n'+json.dumps(results[question]))
     # returns a dictionary of results and a boolean indicating success
     return results, True
 
@@ -344,9 +344,9 @@ def lambda_handler(event, context):
     masked_transcript = ''
     error = ''
     audio_duration = 0
-    url = "https://"+prod_domain+api_route
+    # url = "https://"+prod_domain+api_route
     # url = "https://"+dev_domain+api_route
-    # url = "http://b0f6-2605-a601-a0c8-dc00-593e-40a5-9e0b-c7a3.ngrok.io"+api_route
+    url = "https://e8b5-136-49-4-54.ngrok-free.app"+api_route
 
     # Download file from S3
     local_file_path = '/tmp/'+key
@@ -363,7 +363,7 @@ def lambda_handler(event, context):
         audio_duration = 0
         # audio_duration = get_audio_duration(local_file_path)
         # print("Audio Duration: ", audio_duration)
-        
+
         with open(local_file_path, 'rb') as file:
             ### initialize whisper azure creds
             api_key, api_base, api_version = whisper_credentials['api_key'], whisper_credentials['api_base'], whisper_credentials['api_version']
@@ -373,20 +373,36 @@ def lambda_handler(event, context):
             try:
                 notify_server(url, bucket, key)
             except Exception as e:
-                print("Exception while phoning home:", e)
-            try:
-                # attempts to transcribe audio file
-                transcript = openai.Audio.transcribe(
-                    deployment_id="whisper-model",
-                    model="whisper-1",
-                    file=file
-                    )['text']
-                # replaces SSNs with XXX-XX-XXXX
-                if len(json.dumps(transcript)) > 0:
-                    haveTranscript = True
-            except Exception as e:
-                error = e
-                print("Exception in transcription:", e)
+                print("Exception while phoning home:", json.dumps(e))
+
+            delay = 0
+            maxAttempts = 5
+            attempt = 0
+            while (len(transcript) == 0 and attempt < maxAttempts):
+                print("Beginning transcript loop")
+                errorPresent = False
+                try:
+                    # attempts to transcribe audio file
+                    print("Attempt #", attempt, "of", maxAttempts,"; Delay:", delay)
+                    time.sleep(delay)
+                    transcript = openai.Audio.transcribe(
+                        deployment_id="whisper-model",
+                        model="whisper-1",
+                        file=file
+                        )['text']
+                    # replaces SSNs with XXX-XX-XXXX
+                    if len(json.dumps(transcript)) > 0:
+                        print("Success generating transcript; exiting loop")
+                        haveTranscript = True
+                except Exception as e:
+                    error = e
+                    attempt += 1
+                    if delay == 0:
+                        delay = 10
+                    else:
+                        delay = delay * 2
+                    print("Exception in transcription:", json.dumps(e))
+                    print("Current delay:", delay, "; Attempt", attempt, "of", maxAttempts," for file ", key)
 
             print("Closing file...")
             file.close()
@@ -402,9 +418,9 @@ def lambda_handler(event, context):
         print("Deleted file /tmp/"+key)
     except Exception as e:
         error = e
-        print("Exception in deleting file:", e)
+        print("Exception in deleting file:", json.dumps(e))
 
-    print("Transcript:", transcript)
+    print("Transcript:", json.dumps(transcript))
 
     try:
         # analyze the transcript with the given prompts
@@ -412,13 +428,13 @@ def lambda_handler(event, context):
             result, haveResponse = analyze(transcript, openai_credentials)
     except Exception as e:
         error = e
-        print("Exception in Q&A:", e)
+        print("Exception in Q&A:", json.dumps(e))
 
     try:
         # indicates success or failure - can be redirected to a different server
         if haveTranscript & haveResponse:
             masked_transcript = replace_digits_with_x(transcript)
-            print("Masked transcript:",masked_transcript)
+            print("Masked transcript:",json.dumps(masked_transcript))
 
             data = json.dumps({
                 "bucket": bucket,
@@ -458,7 +474,7 @@ def lambda_handler(event, context):
         })
         request = requests.post(url, data=data)
         print("Error:", request)
-        print("Exception while phoning home:", e)
+        print("Exception while phoning home:", json.dumps(e))
 
     return {
         'statusCode': 200,
