@@ -364,48 +364,48 @@ def lambda_handler(event, context):
         # audio_duration = get_audio_duration(local_file_path)
         # print("Audio Duration: ", audio_duration)
 
-        with open(local_file_path, 'rb') as file:
-            ### initialize whisper azure creds
-            api_key, api_base, api_version = whisper_credentials['api_key'], whisper_credentials['api_base'], whisper_credentials['api_version']
-            openai.api_key = api_key
-            openai.api_base = api_base
-            openai.api_version = api_version
-            try:
-                notify_server(url, bucket, key)
-            except Exception as e:
-                print("Exception while phoning home:", json.dumps(e))
 
-            delay = 0
-            maxAttempts = 5
-            attempt = 0
-            while (len(transcript) == 0 and attempt < maxAttempts):
-                print("Beginning transcript loop")
-                errorPresent = False
-                try:
-                    # attempts to transcribe audio file
-                    print("Attempt #", attempt, "of", maxAttempts,"; Delay:", delay)
-                    time.sleep(delay)
+        ### initialize whisper azure creds
+        api_key, api_base, api_version = whisper_credentials['api_key'], whisper_credentials['api_base'], whisper_credentials['api_version']
+        openai.api_key = api_key
+        openai.api_base = api_base
+        openai.api_version = api_version
+        try:
+            notify_server(url, bucket, key)
+        except Exception as e:
+            print("Exception while phoning home:", json.dumps(e))
+
+        delay = 0
+        maxAttempts = 5
+        attempt = 0
+        while (len(transcript) == 0 and attempt < maxAttempts):
+            print("Beginning transcript loop")
+            errorPresent = False
+            try:
+                # attempts to transcribe audio file
+                print("Attempt #", attempt, "of", maxAttempts,"; Delay:", delay)
+                time.sleep(delay)
+                with open(local_file_path, 'rb') as file:
                     transcript = openai.Audio.transcribe(
                         deployment_id="whisper-model",
                         model="whisper-1",
                         file=file
                         )['text']
+                print("Closing file...")
+                file.close()
                     # replaces SSNs with XXX-XX-XXXX
-                    if len(json.dumps(transcript)) > 0:
-                        print("Success generating transcript; exiting loop")
-                        haveTranscript = True
-                except Exception as e:
-                    error = e
-                    attempt += 1
-                    if delay == 0:
-                        delay = 10
-                    else:
-                        delay = delay * 2
-                    print("Exception in transcription:", json.dumps(e))
-                    print("Current delay:", delay, "; Attempt", attempt, "of", maxAttempts," for file ", key)
-
-            print("Closing file...")
-            file.close()
+                if len(json.dumps(transcript)) > 0:
+                    print("Success generating transcript; exiting loop")
+                    haveTranscript = True
+            except Exception as e:
+                error = e
+                attempt += 1
+                if delay == 0:
+                    delay = 10
+                else:
+                    delay = delay * 2
+                print("Exception in transcription:", e)
+                print("Current delay:", delay, "; Attempt", attempt, "of", maxAttempts," for file ", key)
 
 
     except Exception as e:
@@ -418,7 +418,7 @@ def lambda_handler(event, context):
         print("Deleted file /tmp/"+key)
     except Exception as e:
         error = e
-        print("Exception in deleting file:", json.dumps(e))
+        print("Exception in deleting file:", e)
 
     print("Transcript:", json.dumps(transcript))
 
@@ -457,7 +457,7 @@ def lambda_handler(event, context):
                 "raw_transcript": json.dumps(transcript),
                 "success": "false",
                 "status": "Error",
-                "errorMessage": json.dumps(error)
+                # "errorMessage": json.dumps(error)
             })
             request = requests.post(url, data=data)
             print("Error:", request)
@@ -470,7 +470,7 @@ def lambda_handler(event, context):
             "raw_transcript": json.dumps(transcript),
             "success": "false",
             "status": "Error",
-            "errorMessage": json.dumps(error)
+            # "errorMessage": json.dumps(error)
         })
         request = requests.post(url, data=data)
         print("Error:", request)

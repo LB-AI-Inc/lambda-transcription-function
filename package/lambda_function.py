@@ -307,10 +307,10 @@ def analyze(transcript, openai_credentials):
                     "raw": response['choices'][0]['message']['content']
                 }
         except Exception as e:
-            print("Exception in formatting response:", e)
+            print("Exception in formatting response:", json.dumps(e))
         if results[question]['type'] != "StrengthAssessment" and results[question]['type'] != "WeaknessAssessment" and results[question]['type'] != "Gist":
             results[question]['raw'] = replace_digits_with_x(results[question]['raw'])
-        print('\n'+json.dumps(results[question]))
+        # print('\n'+json.dumps(results[question]))
     # returns a dictionary of results and a boolean indicating success
     return results, True
 
@@ -364,48 +364,48 @@ def lambda_handler(event, context):
         # audio_duration = get_audio_duration(local_file_path)
         # print("Audio Duration: ", audio_duration)
 
-        with open(local_file_path, 'rb') as file:
-            ### initialize whisper azure creds
-            api_key, api_base, api_version = whisper_credentials['api_key'], whisper_credentials['api_base'], whisper_credentials['api_version']
-            openai.api_key = api_key
-            openai.api_base = api_base
-            openai.api_version = api_version
-            try:
-                notify_server(url, bucket, key)
-            except Exception as e:
-                print("Exception while phoning home:", e)
 
-            delay = 0
-            maxAttempts = 5
-            attempt = 0
-            while (len(transcript) == 0 and attempt < maxAttempts):
-                print("Beginning transcript loop")
-                errorPresent = False
-                try:
-                    # attempts to transcribe audio file
-                    print("Attempt #", attempt, "of", maxAttempts,"; Delay:", delay)
-                    time.sleep(delay)
+        ### initialize whisper azure creds
+        api_key, api_base, api_version = whisper_credentials['api_key'], whisper_credentials['api_base'], whisper_credentials['api_version']
+        openai.api_key = api_key
+        openai.api_base = api_base
+        openai.api_version = api_version
+        try:
+            notify_server(url, bucket, key)
+        except Exception as e:
+            print("Exception while phoning home:", json.dumps(e))
+
+        delay = 0
+        maxAttempts = 5
+        attempt = 0
+        while (len(transcript) == 0 and attempt < maxAttempts):
+            print("Beginning transcript loop")
+            errorPresent = False
+            try:
+                # attempts to transcribe audio file
+                print("Attempt #", attempt, "of", maxAttempts,"; Delay:", delay)
+                time.sleep(delay)
+                with open(local_file_path, 'rb') as file:
                     transcript = openai.Audio.transcribe(
                         deployment_id="whisper-model",
                         model="whisper-1",
                         file=file
                         )['text']
+                print("Closing file...")
+                file.close()
                     # replaces SSNs with XXX-XX-XXXX
-                    if len(json.dumps(transcript)) > 0:
-                        print("Success generating transcript; exiting loop")
-                        haveTranscript = True
-                except Exception as e:
-                    error = e
-                    attempt += 1
-                    if delay == 0:
-                        delay = 10
-                    else:
-                        delay = delay * 2
-                    print("Exception in transcription:", e)
-                    print("Current delay:", delay, "; Attempt", attempt, "of", maxAttempts," for file ", key)
-
-            print("Closing file...")
-            file.close()
+                if len(json.dumps(transcript)) > 0:
+                    print("Success generating transcript; exiting loop")
+                    haveTranscript = True
+            except Exception as e:
+                error = e
+                attempt += 1
+                if delay == 0:
+                    delay = 10
+                else:
+                    delay = delay * 2
+                print("Exception in transcription:", e)
+                print("Current delay:", delay, "; Attempt", attempt, "of", maxAttempts," for file ", key)
 
 
     except Exception as e:
@@ -420,7 +420,7 @@ def lambda_handler(event, context):
         error = e
         print("Exception in deleting file:", e)
 
-    print("Transcript:", transcript)
+    print("Transcript:", json.dumps(transcript))
 
     try:
         # analyze the transcript with the given prompts
@@ -428,13 +428,13 @@ def lambda_handler(event, context):
             result, haveResponse = analyze(transcript, openai_credentials)
     except Exception as e:
         error = e
-        print("Exception in Q&A:", e)
+        print("Exception in Q&A:", json.dumps(e))
 
     try:
         # indicates success or failure - can be redirected to a different server
         if haveTranscript & haveResponse:
             masked_transcript = replace_digits_with_x(transcript)
-            print("Masked transcript:",masked_transcript)
+            print("Masked transcript:",json.dumps(masked_transcript))
 
             data = json.dumps({
                 "bucket": bucket,
@@ -457,7 +457,7 @@ def lambda_handler(event, context):
                 "raw_transcript": json.dumps(transcript),
                 "success": "false",
                 "status": "Error",
-                "errorMessage": json.dumps(error)
+                # "errorMessage": json.dumps(error)
             })
             request = requests.post(url, data=data)
             print("Error:", request)
@@ -470,11 +470,11 @@ def lambda_handler(event, context):
             "raw_transcript": json.dumps(transcript),
             "success": "false",
             "status": "Error",
-            "errorMessage": json.dumps(error)
+            # "errorMessage": json.dumps(error)
         })
         request = requests.post(url, data=data)
         print("Error:", request)
-        print("Exception while phoning home:", e)
+        print("Exception while phoning home:", json.dumps(e))
 
     return {
         'statusCode': 200,
