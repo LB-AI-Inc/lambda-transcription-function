@@ -383,9 +383,6 @@ def lambda_handler(event, context):
     masked_transcript = ''
     error = ''
     audio_duration = 0
-    url = "https://"+prod_domain+api_route
-    # url = "https://"+dev_domain+api_route
-    # url = "http://b0f6-2605-a601-a0c8-dc00-593e-40a5-9e0b-c7a3.ngrok.io"+api_route
 
     # Download file from S3
     local_file_path = '/tmp/'+key
