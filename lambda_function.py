@@ -161,7 +161,7 @@ def get_audio_duration(file_path):
         print("FFMPEG error:", e)
         return None
 
-def analyze(transcript, openai_credentials):
+def analyze(transcript, openai_credentials, prompts):
     # initialize the chat completion azure creds
     api_key, api_base, api_version = openai_credentials['api_key'], openai_credentials['api_base'], openai_credentials['api_version']
     openai.api_key = api_key
@@ -310,33 +310,35 @@ def analyze(transcript, openai_credentials):
     }
 
     results = {}
-    for question in promptList:
+    for question in prompts:
 
-        if promptList[question]['graded']:
-            response = with_function(promptList[question]['question'], system_prompt, transcript)
-        elif not promptList[question]['graded']:
-            response = without_function(promptList[question]['question'], system_prompt, transcript)
+        if prompts[question]['graded']:
+            response = with_function(prompts[question]['question'], system_prompt, transcript)
+        elif not prompts[question]['graded']:
+            response = without_function(prompts[question]['question'], system_prompt, transcript)
 
+
+        print(json.dumps(response))
         try:
-            if promptList[question]['graded']:
+            if prompts[question]['graded']:
                 results[question] = {
-                    "type": promptList[question]['type'],
-                    "graded": promptList[question]['graded'],
+                    "type": question,
+                    "graded": prompts[question]['graded'],
                     "raw": response['choices'][0]['message']['function_call']['arguments'],
                     # "grade": answer['answer'],
                     # "reasoning": answer['reasoning']
                 }
-            elif not promptList[question]['graded']:
+            elif not prompts[question]['graded']:
                 results[question] = {
-                    "type": promptList[question]['type'],
-                    "graded": promptList[question]['graded'],
+                    "type": question,
+                    "graded": prompts[question]['graded'],
                     "raw": response['choices'][0]['message']['content']
                 }
         except Exception as e:
             print("Exception in formatting response:", json.dumps(e))
         if results[question]['type'] != "StrengthAssessment" and results[question]['type'] != "WeaknessAssessment" and results[question]['type'] != "Gist":
             results[question]['raw'] = replace_digits_with_x(results[question]['raw'])
-        # print('\n'+json.dumps(results[question]))
+        print(json.dumps(results[question]))
     # returns a dictionary of results and a boolean indicating success
     return results, True
 
@@ -353,10 +355,28 @@ def notify_server(url, bucket, key):
     print("Analyzing:", request)
     # print(json.dumps(request))
 
+def create_prompt_list(prompts):
+    promptList = {}
+    for prompt in prompts:
+        promptList[prompt['type']] = {
+            "type": prompt['type'],
+            "question": prompt['question'],
+            "graded": prompt['graded'],
+        }
+    return promptList
+
+def retrieve_prompts(url, workflowId):
+    request = requests.get(url+"/api/prompt-workflow?workflowId="+workflowId)
+    workflow = request.json()['workflow']
+    # print("Retrieving prompts:", workflow)
+    return create_prompt_list(workflow)
+
 def lambda_handler(event, context):
 
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
+    print(json.dumps(event))
+    # workflowId = event['Records'][0]['responseElements']['x-amz-meta-workflowid']
     key_lower = key.lower()
 
     # -----------------------------------------------------
@@ -370,9 +390,12 @@ def lambda_handler(event, context):
     destination_bucket = 'lightbulb-prod-output'
     # destination_bucket = 'lightbulb-dev-output'
 
-    url = "https://"+prod_domain+api_route
-    # url = "https://"+dev_domain+api_route
-    # url = "http://b581-2605-a601-a0c8-dc00-6be7-5945-4f80-f17a.ngrok.io"+api_route
+    prod_stub = "https://"+prod_domain
+    dev_stub = "https://"+dev_domain
+    test_stub = "https://4c71-136-62-209-37.ngrok-free.app"
+    # url = prod_stub+api_route
+    # url = dev_stub+api_route
+    url = test_stub+api_route
     # -----------------------------------------------------
 
     haveTranscript = False
@@ -383,13 +406,25 @@ def lambda_handler(event, context):
     masked_transcript = ''
     error = ''
     audio_duration = 0
+    workflow = {}
 
     # Download file from S3
     local_file_path = '/tmp/'+key
     s3client = boto3.client('s3')
     s3client.download_file(bucket, key, local_file_path)
+    s3_response = s3client.head_object(Bucket=bucket, Key=key)
+    metadata = s3_response.get('Metadata', {})
+    workflowId = metadata['workflowid']
+    # print("Metadata:", metadata)
+    print("Workflow ID:", workflowId)
     print("Downloading", key, "from", bucket, local_file_path)
     openai_credentials, whisper_credentials = get_openai_credentials()
+
+    try:
+        workflow = retrieve_prompts(test_stub, workflowId)
+        print("Retrieved:", workflow)
+    except Exception as e:
+        print("Exception while retrieving prompts:", e)
 
     try:
 
@@ -456,22 +491,28 @@ def lambda_handler(event, context):
         error = e
         print("Exception in deleting file:", e)
 
-    print("Transcript:", json.dumps(transcript))
+    if len(transcript) > 0:
+        print("Transcript is present")
+    else:
+        print("Transcript is empty")
 
     try:
         # analyze the transcript with the given prompts
         if transcript:
-            result, haveResponse = analyze(transcript, openai_credentials)
+            result, haveResponse = analyze(transcript, openai_credentials, workflow)
     except Exception as e:
         error = e
-        print("Exception in Q&A:", json.dumps(e))
+        print("Exception in Q&A:", e)
 
     try:
         # Indicates success or failure - can be redirected to a different server
         if haveTranscript & haveResponse:
             # replaces SSNs with XXX-XX-XXXX
             masked_transcript = replace_digits_with_x(transcript)
-            print("Masked transcript:",json.dumps(masked_transcript))
+            if len(masked_transcript) > 0:
+                print("Masked transcript is present")
+            else:
+                print("Masked transcript is empty")
 
             destination_key = key
             move_file(bucket, key, destination_bucket, destination_key)
@@ -481,6 +522,7 @@ def lambda_handler(event, context):
                 "result": json.dumps(result),
                 "transcript": json.dumps(masked_transcript),
                 "raw_transcript": json.dumps(transcript),
+                "workflowId": workflowId,
                 "success": "true",
                 "status": "Completed"
             })
@@ -494,6 +536,7 @@ def lambda_handler(event, context):
                 "result": json.dumps(result),
                 "transcript": json.dumps(masked_transcript),
                 "raw_transcript": json.dumps(transcript),
+                "workflowId": workflowId,
                 "success": "false",
                 "status": "Error",
                 # "errorMessage": json.dumps(error)
@@ -507,6 +550,7 @@ def lambda_handler(event, context):
             "result": json.dumps(result),
             "transcript": json.dumps(masked_transcript),
             "raw_transcript": json.dumps(transcript),
+            "workflowId": workflowId,
             "success": "false",
             "status": "Error",
             # "errorMessage": json.dumps(error)
