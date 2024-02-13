@@ -53,7 +53,7 @@ def move_file(source_bucket, source_key, destination_bucket, destination_key):
         print(f"Error moving file: {e}")
         return False
 
-def with_function(question, system_prompt, transcript):
+def with_function(question, system_prompt, transcript, engine):
     functions = [{
             'name': 'answer_generator',
             'description': 'Get an answer to the question',
@@ -73,7 +73,7 @@ def with_function(question, system_prompt, transcript):
         }]
 
     response = openai.ChatCompletion.create(
-        engine="GPTturbo",
+        engine=engine,
         temperature=0,
         messages=[
             {
@@ -92,9 +92,9 @@ def with_function(question, system_prompt, transcript):
     )
     return response
 
-def without_function(question, system_prompt, transcript):
+def without_function(question, system_prompt, transcript, engine):
     response = openai.ChatCompletion.create(
-            engine="GPTturbo",
+            engine=engine,
             temperature=0,
             messages=[
                 {
@@ -313,9 +313,9 @@ def analyze(transcript, openai_credentials, prompts):
     for question in prompts:
 
         if prompts[question]['graded']:
-            response = with_function(prompts[question]['question'], system_prompt, transcript)
+            response = with_function(prompts[question]['question'], system_prompt, transcript, prompts[question]['engine'])
         elif not prompts[question]['graded']:
-            response = without_function(prompts[question]['question'], system_prompt, transcript)
+            response = without_function(prompts[question]['question'], system_prompt, transcript, prompts[question]['engine'])
 
 
         print(json.dumps(response))
@@ -392,7 +392,7 @@ def lambda_handler(event, context):
 
     prod_stub = "https://"+prod_domain
     dev_stub = "https://"+dev_domain
-    test_stub = "https://4c71-136-62-209-37.ngrok-free.app"
+    test_stub = "https://ffb1-136-62-209-37.ngrok-free.app"
     # url = prod_stub+api_route
     # url = dev_stub+api_route
     url = test_stub+api_route
