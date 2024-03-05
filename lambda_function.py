@@ -342,13 +342,14 @@ def analyze(transcript, openai_credentials, prompts):
     # returns a dictionary of results and a boolean indicating success
     return results, True
 
-def notify_server(url, bucket, key):
+def notify_server(url, bucket, key, callCreate):
     data = json.dumps({
                 "bucket": bucket,
                 "key": key,
                 "result": '',
                 "transcript": '',
                 "success": '',
+                "callCreate": callCreate,
                 "status": "Analyzing"
             })
     request = requests.post(url, data=data)
@@ -362,11 +363,13 @@ def create_prompt_list(prompts):
             "type": prompt['type'],
             "question": prompt['question'],
             "graded": prompt['graded'],
+            "engine": prompt['engine']
         }
     return promptList
 
 def retrieve_prompts(url, workflowId):
     request = requests.get(url+"/api/prompt-workflow?workflowId="+workflowId)
+    print(request.json())
     workflow = request.json()['workflow']
     # print("Retrieving prompts:", workflow)
     return create_prompt_list(workflow)
@@ -387,15 +390,15 @@ def lambda_handler(event, context):
     dev_domain = 'dev.lightbulb.ai'
     api_route = '/api/call-data'
 
-    destination_bucket = 'lightbulb-prod-output'
-    # destination_bucket = 'lightbulb-dev-output'
+    # destination_bucket = 'lightbulb-prod-output'
+    destination_bucket = 'lightbulb-dev-output'
 
     prod_stub = "https://"+prod_domain
     dev_stub = "https://"+dev_domain
-    test_stub = "https://ffb1-136-62-209-37.ngrok-free.app"
+    test_stub = "https://c24f-136-62-209-37.ngrok-free.app"
     # url = prod_stub+api_route
-    # url = dev_stub+api_route
-    url = test_stub+api_route
+    url = dev_stub+api_route
+    # url = test_stub+api_route
     # -----------------------------------------------------
 
     haveTranscript = False
@@ -415,13 +418,19 @@ def lambda_handler(event, context):
     s3_response = s3client.head_object(Bucket=bucket, Key=key)
     metadata = s3_response.get('Metadata', {})
     workflowId = metadata['workflowid']
+    callCreate = metadata['callcreate']
     # print("Metadata:", metadata)
     print("Workflow ID:", workflowId)
     print("Downloading", key, "from", bucket, local_file_path)
     openai_credentials, whisper_credentials = get_openai_credentials()
 
     try:
-        workflow = retrieve_prompts(test_stub, workflowId)
+        notify_server(url, bucket, key, callCreate)
+    except Exception as e:
+        print("Exception while phoning home:", json.dumps(e))
+
+    try:
+        workflow = retrieve_prompts(dev_stub, workflowId)
         print("Retrieved:", workflow)
     except Exception as e:
         print("Exception while retrieving prompts:", e)
@@ -441,10 +450,6 @@ def lambda_handler(event, context):
         openai.api_key = api_key
         openai.api_base = api_base
         openai.api_version = api_version
-        try:
-            notify_server(url, bucket, key)
-        except Exception as e:
-            print("Exception while phoning home:", json.dumps(e))
 
         delay = 0
         maxAttempts = 5
