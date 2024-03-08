@@ -139,6 +139,30 @@ def get_openai_credentials():
         print(f"Error retrieving OpenAI and WhisperAI credentials from Secrets Manager: {e}")
         return None, None
 
+def get_deepgram_credentials():
+
+    secret_name = "Deepgram_credentials"
+    region_name = "us-east-1"
+
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    try:
+        response = client.get_secret_value(
+            SecretId=secret_name
+        )
+        secret = json.loads(response['SecretString'])
+        deepgram_api_key = secret.get('deepgram_api_key', '')
+        return deepgram_api_key
+    except Exception as e:
+        # For a list of exceptions thrown, see
+        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+        print(f"Error retrieving Deepgram credentials from Secrets Manager: {e}")
+        return None
 
 def get_audio_duration(file_path):
     try:
@@ -170,144 +194,6 @@ def analyze(transcript, openai_credentials, prompts):
 
     # system_prompt = "You are an expert sales coach. You are helping critique a call for people to gather data and help people improve. Answer the questions as asked and provide clear details when asked for. The transcript is provided and be clear that there could be multiple people on the call. Do not include any Social Secuirty numbers in your response, this is sensitive information."
     system_prompt = "You are an expert quality assurance manager for an inbound call center. You are helping critique inbound calls made by customers, who we’ll refer to as participants, to our company representatives. Answer the questions as asked and provide clear details when asked for. The transcript of the call is provided and there are multiple people on the call- the participant (the customer) and the representative of the company (whose performance you are evaluating). On all calls, reps are required to verify the Social Security number of the caller for security reasons. Do not criticize the rep for asking for sensitive information like this, as it is a part of the standard process."
-
-    promptList = {
-        "DepartmentID": {
-            "type": "DepartmentID",
-            "question": "Was this call related to NueSynergy or PlanSource? Answer should be either PlanSource or NueSynergy.",
-            "graded": False,
-        },
-        "RepID": {
-            "type": "RepID",
-            "question": "What was the name of the representative who answered the phone call?",
-            "graded": False,
-        },
-        "CustomerID": {
-            "type": "CustomerID",
-            "question": "What was the name of the customer who called in asking for help?",
-            "graded": False,
-        },
-        "Greeting": {
-            "type": "Greeting",
-            "question": "Did the representative greet the participant by saying something like 'Thank you for calling NueSynergy' or 'PlanSource, my name is (Their Name)' or something similar to this? Another example would be 'Plansource or Nuesynergy, This is (THEIR NAME) how can I help you?' The rep must say their name and NueSynergy/PlanSource in their greeting. to get credit for this. If the rep introduced themselves by stating their company name, and their personal name, that is a positive answer. If they did not say their name and either PlanSource or NueSynergy, that is a negative answer.",
-            "graded": True,
-        },
-        "SecurityVerification": {
-            "type": "SecurityVerification",
-            "question": "Did the participant disclose their social security number? Either the full number or their last four digits counts as a positive answer. If they didn’t verify the social, did they verify the last four digits? If the answer to all of those is no, it's a negative answer. Do not repeat the number when stating your reasoning.",
-            "graded": True,
-        },
-        "NeedsAssessment": {
-            "type": "NeedsAssessment",
-            "question": "Did the representative ask, 'How can I help you today?' or something similar to this? If they did ask this or something very similar, this is a positive answer. If they did not ask a question to understand why the client called, this is a negative answer.",
-            "graded": True,
-        },
-        "RepDiscovery": {
-            "type": "RepDiscovery",
-            "question": "Did the representative ask relevant questions to further understand the reasoning behind why the customer contacted them? It's ok if they verified the customer first. If they did, this is a positive answer. If they didn’t, this is a negative answer.",
-            "graded": True,
-        },
-        "ResourceUtilization": {
-            "type": "ResourceUtilization",
-            "question": "Does it appear that the representative used all the available resources they have at their disposal to resolve the customer’s issue? If they are taking a long time to answer the question, not seeming confident in their answers, or the customer is confused, this is likely evidence that they should have utilized additional resources to answer the call. If they did use all available resources, this is a positive answer. If the issue was resolved on this call, and it isn’t obvious that the rep was taking a long time to answer, not seeming confident, or the customer wasn’t confused by the rep’s responses, this is also a positive answer. If the rep did take a long time to answer questions, or wasn’t confident, or confused the customer, this is a negative answer.",
-            "graded": True,
-        },
-        "Responsiveness": {
-            "type": "Responsiveness",
-            "question": "Did the representative provide the participant with thorough and accurate responses to all questions? If they did, this is a positive answer. If they did not, this is a negative answer. Explain your reasoning.",
-            "graded": True,
-        },
-        "HoldCompliance": {
-            "type": "HoldCompliance",
-            "question": "Does it appear the rep placed the customer on hold? Evidence of this would be the rep saying something like 'I’m going to place you on a brief hold.' If the word ‘hold’ was never mentioned, and it’s clear the rep didn’t place the customer on hold, you should answer true. If the rep did mention placing the customer on hold, you should answer false.",
-            "graded": True,
-        },
-        "TransferCompliance": {
-            "type": "TransferCompliance",
-            "question": "Did the representative mention they would be transferring the participant to to someone else to help them? Evidence of this would include the rep saying something like “I’m going to transfer you to” If the word ‘transfer’ was never mentioned, and it’s clear the rep didn’t transfer the customer to another department, you should answer true. If the rep did mention transferring the customer, you should answer false.",
-            "graded": True,
-        },
-        "CallDisconnected": {
-            "type": "CallDisconnected",
-            "question": "Was this call disconnected unintentionally? Evidence of this would include the call ending abruptly, without a formal goodbye. If there was no formal goodbye, you should answer false. If there was a formal goodbye and the call did not end abruptly, you should answer true.",
-            "graded": True,
-        },
-        "RecapConfirmation": {
-            "type": "RecapConfirmation",
-            "question": "Did the representative provide a recap of the participant’s issue along with the resolution? Evidence of this would include the representative discussing next steps, or actions they will take to resolve the customer’s concern. If the representative did clarify how they are going to solve the customer’s issue, this is a positive answer. If they did not provide any kind of summary of the call, or the solution or steps the rep was going to take to solve the issue, this is a negative answer.",
-            "graded": True,
-        },
-        "AdditionalSupportCheck": {
-            "type": "AdditionalSupportCheck",
-            "question": "Did the representative or the participant indicate that all questions were answered or all needs were met before ending the call? If the representative asked a question like 'Is there anything else I can assist you with?' or if the participant indicated their needs were met, this is a positive answer. If neither occurred, this is a negative answer.",
-            "graded": True,
-        },
-        "SurveyRequest": {
-            "type": "SurveyRequest",
-            "question": "Did the representative ask if the participant would like to stay on the line to take a brief survey to provide feedback on their call? Or did they say “please hold for a brief survey.” If they did ask about or mention the survey, this is a positive answer. If they did not ask about or mention the survey at the end of the call, this is a negative answer.",
-            "graded": True
-        },
-        "ClosingFormality": {
-            "type": "ClosingFormality",
-            "question": "Did the representative complete the call with a proper closing? An example of this would include the rep saying something like 'Thank you for calling and have a great day!' If the rep did thank them for calling and said goodbye, this is a positive answer. If the rep did not say thank you for calling and said goodbye, this is a negative answer.",
-            "graded": True
-        },
-        "CourtesyAssessment": {
-            "type": "CourtesyAssessment",
-            "question": "Did the representative treat the participant with courtesy? Evidence of this would include the rep consistently addressing the participant by their name, showing empathy, and being professional. If they were generally courteous and professional, this is a positive answer. If the rep never called the participant by name, or was unprofessional or rude, this is a negative answer.",
-            "graded": True
-        },
-        "CommunicationTone": {
-            "type": "CommunicationTone",
-            "question": "Based on the language used by the rep, how positive was their tone and sentiment? Did they display an engaged, pleasant tone? If they They maintained a professional and courteous demeanor throughout the call, this is a positive answer. If the rep was rude or unprofessional, this is a negative answer.",
-            "graded": True
-        },
-        "ListeningEtiquette": {
-            "type": "ListeningEtiquette",
-            "question": "Did the representative wait for the participant to finish talking before speaking? If they interrupt in error, did they apologize for the interruption?  If there were no interruptions and the rep displayed proper listening etiquette, or if they apologized for interrupting, this is a positive answer. If the rep interrupted the participant and did not apologize for interrupting, this is a negative answer.",
-            "graded": True
-        },
-        "EmpathyAssessment": {
-            "type": "EmpathyAssessment",
-            "question": "Did the representative treat the participant with respect by trying to understand the cause of the participant’s problem, understand how their problem affects their behavior, and respond with empathy? If yes, this is a positive answer. If no, this is a negative answer.",
-            "graded": True
-        },
-        "HonestyAssessment": {
-            "type": "HonestyAssessment",
-            "question": "Did the rep give accurate answers in a confident tone that addressed the concern of the customer directly?  If yes, this is a positive answer. If no, this is a negative answer.",
-            "graded": True
-        },
-        "InterestEngagement": {
-            "type": "InterestEngagement",
-            "question": "Did the representative exhibit interest in the participant's questions or concerns?  If yes, this is a positive answer. If no, this is a negative answer.",
-            "graded": True
-        },
-        "ResolutionEffort": {
-            "type": "ResolutionEffort",
-            "question": "Did the representative show effort in solving the participant's issue with the goal of achieving a solution on the call?  If yes, this is a positive answer. If no, this is a negative answer.",
-            "graded": True
-        },
-        "DeEscalationEffort": {
-            "type": "DeEscalationEffort",
-            "question": "Did a situation arise during the call that required the representative to de-escalate tension or agitation from the participant? If yes, did the representative employ strategies like using empathy statements, maintaining a calm tone, and demonstrating a clear understanding of the problem to successfully de-escalate the situation? If and only if there was a palpable tension or agitation from the participant that the representative successfully de-escalated, this is a positive answer. If the call was generally pleasant, with no instances of tension or agitation that required de-escalation, this is also a positive answer. If there was tension or agitation from the participant that the representative failed to de-escalate, this is a negative answer. Explain your reasoning and reference any utterances from the participant that indicate frustration or tension.",
-            "graded": True
-        },
-        "StrengthAssessment": {
-            "type": "StrengthAssessment",
-            "question": "Identify three elements of the call where the rep was performing positively. Act as a coach giving encouraging feedback to the rep for what they did right on this call. Keep it to three main points of feedback so the reader isn’t overwhelmed.",
-            "graded": False,
-        },
-        "WeaknessAssessment": {
-            "type": "WeaknessAssessment",
-            "question": "Identify three elements of the call where the rep was performing poorly. Act as a coach giving feedback on what the rep can be doing better on the call to follow guidelines above. Summarize any aspects of the required process that they missed, and how they can improve next time. Keep this response concise, as to not overwhelm the reader.",
-            "graded": False,
-        },
-        "Gist": {
-            "type": "Gist",
-            "question": "Generate a brief summary of this call formatted with bullet points. Use the following criteria in your response: 1. Customer's concern, 2. Whether or not the issue was resolved, and how it was resolved, 3. Any action items that are required as a result of the call. 4. Customer's sentiment throughout the call. What was it at the beginning and what was it at the end.",
-            "graded": False,
-        }
-    }
 
     results = {}
     for question in prompts:
@@ -395,10 +281,10 @@ def lambda_handler(event, context):
 
     prod_stub = "https://"+prod_domain
     dev_stub = "https://"+dev_domain
-    test_stub = "https://c24f-136-62-209-37.ngrok-free.app"
+    test_stub = "https://8dec-136-62-209-37.ngrok-free.app"
     # url = prod_stub+api_route
-    url = dev_stub+api_route
-    # url = test_stub+api_route
+    # url = dev_stub+api_route
+    url = test_stub+api_route
     # -----------------------------------------------------
 
     haveTranscript = False
@@ -407,6 +293,7 @@ def lambda_handler(event, context):
     result = 'empty'
     transcript = ''
     masked_transcript = ''
+    segments = []
     error = ''
     audio_duration = 0
     workflow = {}
@@ -430,7 +317,7 @@ def lambda_handler(event, context):
         print("Exception while phoning home:", json.dumps(e))
 
     try:
-        workflow = retrieve_prompts(dev_stub, workflowId)
+        workflow = retrieve_prompts(test_stub, workflowId)
         print("Retrieved:", workflow)
     except Exception as e:
         print("Exception while retrieving prompts:", e)
@@ -451,6 +338,9 @@ def lambda_handler(event, context):
         openai.api_base = api_base
         openai.api_version = api_version
 
+        ### initialize deepgram
+        deepgram_api_key = get_deepgram_credentials()
+
         delay = 0
         maxAttempts = 5
         attempt = 0
@@ -462,11 +352,25 @@ def lambda_handler(event, context):
                 print("Attempt #", attempt, "of", maxAttempts,"; Delay:", delay)
                 time.sleep(delay)
                 with open(local_file_path, 'rb') as file:
-                    transcript = openai.Audio.transcribe(
-                        deployment_id="whisper-model",
-                        model="whisper-1",
-                        file=file
-                        )['text']
+                    buffer_data = file.read()
+
+                    response = requests.post(
+                        "https://api.deepgram.com/v1/listen?smart_format=true&model=nova-2&language=en-US&redact=pci&diarize=true&redact=account_number&redact=age&redact=dob&redact=driver_license&redact=email_address&redact=healthcare_number&redact=ip_address&redact=location_address&redact=location_city&redact=location_coordinate&redact=location_country&redact=location_state&redact=location_zip&redact=marital_status&redact=name_family&redact=name_given&redact=name_medical_professional&redact=numerical_pii&redact=passport_number&redact=password&redact=phone_number&redact=ssn&redact=username&redact=vehicle_id",
+                        headers={
+                            "Authorization": "Token " + deepgram_api_key,
+                        },
+                        data=buffer_data
+                    ).json()
+
+                    print("Deepgram response:", response)
+                    transcript = response['results']['channels'][0]['alternatives'][0]['transcript']
+                    segments = response['results']['channels'][0]['alternatives'][0]['paragraphs']
+
+                    # transcript = openai.Audio.transcribe(
+                    #     deployment_id="whisper-model",
+                    #     model="whisper-1",
+                    #     file=file
+                    #     )['text']
                 print("Closing file...")
                 file.close()
                     # replaces SSNs with XXX-XX-XXXX
@@ -527,6 +431,7 @@ def lambda_handler(event, context):
                 "result": json.dumps(result),
                 "transcript": json.dumps(masked_transcript),
                 "raw_transcript": json.dumps(transcript),
+                "segments": json.dumps(segments),
                 "workflowId": workflowId,
                 "success": "true",
                 "status": "Completed"
@@ -541,6 +446,7 @@ def lambda_handler(event, context):
                 "result": json.dumps(result),
                 "transcript": json.dumps(masked_transcript),
                 "raw_transcript": json.dumps(transcript),
+                "segments": json.dumps(segments),
                 "workflowId": workflowId,
                 "success": "false",
                 "status": "Error",
@@ -555,6 +461,7 @@ def lambda_handler(event, context):
             "result": json.dumps(result),
             "transcript": json.dumps(masked_transcript),
             "raw_transcript": json.dumps(transcript),
+            "segments": json.dumps(segments),
             "workflowId": workflowId,
             "success": "false",
             "status": "Error",
